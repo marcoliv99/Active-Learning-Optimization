@@ -540,9 +540,9 @@ def metrics_plot_new(metrics_df: pd.DataFrame,
                   framealpha = 0.8)
         fig.tight_layout()
 
-        save_path = f'{path}{m}@{k}.png'
+        save_path = os.path.join(path, f'{m}@{k}.png')
 
         fig.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show(fig)
+        plt.show()
         plt.close(fig)
     return 
