@@ -1,32 +1,31 @@
 import pandas as pd
-import os
-import re 
 import numpy as np
 import matplotlib.pyplot as plt 
 import seaborn as sns
+import re
 from evolvepro.src.utils import load_dataset
 
 #Enrichment Factor
 def enrichment_factor(df: pd.DataFrame | dict,
-                     fraction: float=0.1)-> float:
+                     k: int)-> float:
     """
     Computes the Enrichment Factor (EF) at a given fraction of the dataset.
     Parameters
     df: DataFrame sorted by predicted score in descending order.
         Must contain a binary column 'activity_binary' (1 = active, 0 = inactive).
-    fraction : float, optional    
-        Fraction of the dataset to consider as the top subset (default: 0.1 = top 10%).
+    k: int,     
+        Top k position at top of the prediction
     Returns
     float
     Enrichment Fraction for the specific fraction of the dataset.
-"""
+    """
     if df is None:
         raise RuntimeError('Error: Dataframe missing. Load a Dataframe first')
     if 'activity_binary' not in df.columns:
         raise RuntimeError('Error: The Dataframe is missing the activity_binary column.') 
     n_totale=len(df)
     n_attivi=df['activity_binary'].sum()
-    n_top= int(n_totale*fraction)
+    n_top= k
     hits_top =df.head(n_top)['activity_binary'].sum()
     if hits_top == 0 or n_top == 0:
         return 0.0
@@ -43,7 +42,8 @@ def apk(df: pd.DataFrame | dict,
     df: DataFrame sorted by predicted score in descending order, must contain a binary column 'activity_binary' (1 = active, 0 = inactive).
     k: int, the number of top predictions to consider for the AP calculation (default is 10).
     Returns
-    float: The Average Precision at k (AP@k) score."""
+    float: The Average Precision at k (AP@k) score.
+    """
     if df is None:
         raise RuntimeError('Error: Dataframe missing. Load a Dataframe first')
     if 'activity_binary' not in df.columns:
@@ -51,60 +51,105 @@ def apk(df: pd.DataFrame | dict,
     r_totali = df['activity_binary'].sum()
     n_top = k
     df_top = df.head(n_top)
-    somma = 0 
-    hits_trovati = 0
+    precision_sum = 0 
+    hits_found = 0
 
     for i, row in enumerate(df_top.itertuples(), start=1):
         if row.activity_binary == 1:
-            hits_trovati += 1 #contatore del n di hits fino alla posizione i
-            precision_at_i = hits_trovati / i #calcolo della precision in pos i
-            somma+= precision_at_i #contatore delle precision cumulate fino alla posizione i 
+            hits_found += 1 #counter for hits' number to position i
+            precision_at_i = hits_found / i #precision in position i
+            precision_sum+= precision_at_i #counter for the precision values to position i 
     denom = min(k, r_totali)
-    apk = somma/ denom if  denom > 0 else 0.0
+    apk = precision_sum / denom if  denom > 0 else 0.0
     return apk
 
+#Precision@k
+def precision_k(df: pd.DataFrame,
+              k:int) -> float:
+    """
+    Fraction of the top-k predictions that are true hits (activity >= threshold_hit).
+    A perfect model gives 1.
+    Args:
+    df: pd.DataFrame sorted by y_pred, with the column activity_binary
+    k:int, the number of top predictions to consider for the metric calculation"""
+
+    hits_top = df.head(k)['activity_binary'].sum()
+    if hits_top == 0:
+        return 0.0
+    precision = hits_top / k
+    return precision
+
+
 #Average Ranking
-"""Mean of the true rank odf the top-k prediction of the model. 
-A perfect model gives (K+1)/2
-Args:
-df_results: pd.DataFrame, in this dataframe are present the results from the rounds
-k:int,the number of top predictions to consider for the metric calculation"""
-def avg_rank(df_results: pd.DataFrame | dict, k:int=10)-> float:
+def avg_rank(df_results: pd.DataFrame | dict, 
+             k:int=10)-> float:
+    """
+    Mean of the true rank odf the top-k prediction of the model. 
+    A perfect model gives (K+1)/2
+    Args:
+    df_results: pd.DataFrame, in this dataframe are present the results from the rounds
+    k:int,the number of top predictions to consider for the metric calculation"""
+
     avg_rank = df_results['true_rank'].head(k).mean()
     return avg_rank
 
 #Best Ranking 
-"""Best minimum true rank among the top-k predicted; a value of 1 means the model's
-top-k contains the actual best variant. It's like the "did we find the winner?" metric.
-Args:
-df_results: pd.DataFrame, in this dataframe are present the results from the rounds
-k:int,the number of top predictions to consider for the metric calculation"""
-def best_rank(df:pd.DataFrame | dict, k:int=10)->int:
+
+def best_rank(df:pd.DataFrame | dict, 
+              k:int=10)->int:
+    """Best minimum true rank among the top-k predicted; a value of 1 means the model's
+    top-k contains the actual best variant. It's like the "did we find the winner?" metric.
+    Args:
+    df_results: pd.DataFrame, in this dataframe are present the results from the rounds
+    k:int,the number of top predictions to consider for the metric calculation"""
+
     best_rank = df['true_rank'].head(k).min()
     return best_rank
 
 #Top Recall
-"""This metric tells us of all the truly-good variants in the pool,
-what fraction did the model place in its top-k?
-Args
-df_results: pd.DataFrame, in this dataframe are present the results from the rounds
-k:int,the number of top predictions to consider for the metric calculation """
-def top_recall(df_results: pd.DataFrame | dict, k:int=10)-> float:
+
+def top_recall(df_results: pd.DataFrame | dict, 
+               k:int=10)-> float:
+    """This metric tells us of all the truly-good variants in the pool,
+    what fraction did the model place in its top-k?
+    Args
+    df_results: pd.DataFrame, in this dataframe are present the results from the rounds
+    k:int,the number of top predictions to consider for the metric calculation """
+
     hits_top =df_results.head(k)['activity_binary'].sum()
     hits_tot = df_results['activity_binary'].sum()
     top_recall = hits_top/hits_tot
     return top_recall
 
+#F1 Score
+def f1_k(df:pd.DataFrame,
+       k:int) -> float:
+    """Harmonic mean of Precision@k and Recall@k (top_recall).
+    Args:
+    df_results: pd.DataFrame sorted by y_pred, with the column activity_binary
+    k:int, the number of top predictions to consider for the metric calculation"""
+
+    precision = precision_k(df,k)
+    recall=top_recall(df,k)
+    if precision + recall == 0:
+        return 0.0
+    f1=2*(precision*recall/(precision+recall))
+    return f1
+
 #NDCG
-"""This is a graded-relevance metric that rewards putting high-value variants
-near the top of the predicted ranking, with a logarithimic discount for lower ranks.
-Relevance ("gain") is the the min-max-scaled true value.
-It is the ratio between DCG, that uses the model ranking, and IDCG, the ideal ranking
-Args:
-df_labels:pd.DataFrame, it is the dataframe that derives from preliminal experiments, usually DMS
-df_round:pd.DataFrame, in this dataframe are present the results from the rounds
-k:int, the number of top predictions to consider for the metric calculation"""
-def ndcg(df_labels:pd.DataFrame, df_round: pd.DataFrame | dict, k:int=10)-> float:
+
+def ndcg(df_labels:pd.DataFrame, 
+         df_round: pd.DataFrame | dict, 
+         k:int=10)-> float:
+    """This is a graded-relevance metric that rewards putting high-value variants
+    near the top of the predicted ranking, with a logarithimic discount for lower ranks.
+    Relevance ("gain") is the the min-max-scaled true value.
+    It is the ratio between DCG, that uses the model ranking, and IDCG, the ideal ranking
+    Args:
+    df_labels:pd.DataFrame, it is the dataframe that derives from preliminal experiments, usually DMS
+    df_round:pd.DataFrame, in this dataframe are present the results from the rounds
+    k:int, the number of top predictions to consider for the metric calculation"""
+
     i_gain = (df_labels['activity'] - df_labels['activity'].min())/(df_labels['activity'].max()-df_labels['activity'].min())
     #print(i_gain)
     IDCG = (i_gain.head(k)/np.log2(np.arange(1,k+1)+1)).sum()
@@ -117,31 +162,29 @@ def ndcg(df_labels:pd.DataFrame, df_round: pd.DataFrame | dict, k:int=10)-> floa
     return NDCG
 
 #Diversity
-"""This metrics tells us how many different positions we find
-in the predictions of each round
-Args:
-df_round:pd.DataFrame, it's the df of the single round of prediction
-k:int, number of positions in the ranking that you wanna consider
-round:str, which round you are passing in the function"""
 
-def diversity(df_round: dict | pd.DataFrame, k:int):
+def diversity(df_round: dict | pd.DataFrame, 
+              k:int):
+    """This metrics tells us how many different positions we find
+    in the predictions of each round
+    Args:
+    df_round:pd.DataFrame, it's the df of the single round of prediction
+    k:int, number of positions in the ranking that you wanna consider
+    round:str, which round you are passing in the function"""
+
     variant = df_round['variant']
     position_list = []
-    #print(variant)
     for v in variant[:k]:
-        #print(v)
         position = re.findall( r'\d+' , v)
         position_list.extend(position)
-        #print(position_list)
     position_set = set(position_list)
-    #print(position_set)
-    #print(f'Number of  different positions in this {round}: {len(position_set)}')
     return len(position_set)
 
 
-"""Auxiliary function used in the new NDCG function"""
 def _minmax(x: np.ndarray) -> np.ndarray:
-    """This helper function performs min-max scaling on a NumPy array, returning values in the range ([0, 1])"""
+    """Auxiliary function used in the new NDCG function.
+    This helper function performs min-max scaling on a NumPy array, 
+    returning values in the range ([0, 1])"""
     x_min, x_max = x.min(), x.max()
 
     if x_max == x_min:
@@ -150,12 +193,16 @@ def _minmax(x: np.ndarray) -> np.ndarray:
     return (x - x_min) / (x_max - x_min)
 
 #New NDCG 
-"""This is a graded-relevance metric that rewards putting high-value variants
-near the top of the predicted ranking, with a logarithimic discount for lower ranks.
-Relevance ("gain") is the the min-max-scaled true value with the difference from the old one
-that here the gains where activity is under the threshold for hits are zeroed out.
-It is the ratio between DCG, that uses the model ranking, and IDCG, the ideal ranking"""
-def new_ndcg(df_round: pd.DataFrame | dict, threshold_hit:float, k:int=10)-> float:
+
+def new_ndcg(df_round: pd.DataFrame | dict, 
+             threshold_hit:float, 
+             k:int=10)-> float:
+    """This is a graded-relevance metric that rewards putting high-value variants
+    near the top of the predicted ranking, with a logarithimic discount for lower ranks.
+    Relevance ("gain") is the the min-max-scaled true value with the difference from the old one
+    that here the gains where activity is under the threshold for hits are zeroed out.
+    It is the ratio between DCG, that uses the model ranking, and IDCG, the ideal ranking"""
+
     df_ideal = df_round.copy()
     df_ideal_sorted = df_ideal.sort_values(by='activity', ascending=False).reset_index(drop=True)
     activity = np.asarray(df_ideal_sorted['activity'])
@@ -175,14 +222,14 @@ def new_ndcg(df_round: pd.DataFrame | dict, threshold_hit:float, k:int=10)-> flo
     return NDCG
 
 
-"""This function calculates all the metrics for a single round of Evolvepro"""
 def metrics_calc_sing(round:str , 
                       labels: str | pd.DataFrame, 
                       results: str| pd.DataFrame | dict, 
                       output_dir:str, 
                       threshold_hit:float,
                       k:int=10) -> pd.DataFrame:
-    
+    """This function calculates all the metrics for a single round of active learning"""
+
     df_round = load_dataset(results, labels, threshold_hit)
     #print(df_round)
     ef = enrichment_factor(df_round,k)
@@ -190,6 +237,8 @@ def metrics_calc_sing(round:str ,
     a_rank = avg_rank(df_round, k)
     b_rank = best_rank(df_round, k)
     recall = top_recall(df_round, k)
+    prec = precision_k(df_round, k)
+    f1 = f1_k(df_round, k)
     newndcg = new_ndcg(df_round, threshold_hit, k)
     div = diversity(df_round, k)
     metrics = { f'EF@{k}': ef, 
@@ -197,6 +246,8 @@ def metrics_calc_sing(round:str ,
                 f'Avg_Rank@{k}':a_rank, 
                 f'Best_Rank@{k}':b_rank, 
                 f'Top_Recall@{k}':recall, 
+                f'Precision@{k}':prec,
+                f'F1@{k}':f1, 
                 f'NDCG@{k}':newndcg,
                 f'Diversity@{k}':div} 
     #print(metrics)
@@ -228,7 +279,10 @@ def metrics_calc(labels: str,
                 'avg_rank':[], 
                 'best_rank':[], 
                 'top_recall':[], 
-                'ndcg':[]} for i in rep_list}   
+                'precision':[],
+                'f1':[], 
+                'ndcg':[],
+                'diversity':[]} for i in rep_list}   
     #print(metrics)
     #This nested loop iterates over the replicates and rounds results to calcule
     #the metrics for each round
@@ -243,14 +297,18 @@ def metrics_calc(labels: str,
             a_rank = avg_rank(df_round, k)
             b_rank = best_rank(df_round, k)
             recall = top_recall(df_round, k)
+            prec = precision_k(df_round, k)
+            f1 = f1_k(df_round, k)
             normdcg = new_ndcg(df_round,threshold_hit,k)
             divers = diversity(df_round, k)
-    
+
             metrics[i]['ef'].append(ef)
             metrics[i]['ap'].append(ap)
             metrics[i]['avg_rank'].append(a_rank)
             metrics[i]['best_rank'].append(b_rank)
             metrics[i]['top_recall'].append(recall)
+            metrics[i]['precision'].append(prec)
+            metrics[i]['f1'].append(f1)
             metrics[i]['ndcg'].append(normdcg)
             metrics[i]['diversity'].append(divers)
     #print(df)
@@ -261,6 +319,8 @@ def metrics_calc(labels: str,
     a_rank_d = {f'Avg_Rank@{k}_{i}': metrics[i]['avg_rank'] for i in rep_list}
     b_rank_d = {f'Best_Rank@{k}_{i}': metrics[i]['best_rank'] for i in rep_list}
     recall_d = {f'Top_Recall@{k}_{i}': metrics[i]['top_recall'] for i in rep_list}
+    prec_d = {f'Precision@{k}_{i}': metrics[i]['precision'] for i in rep_list}
+    f1_d = {f'F1_score@{k}_{i}': metrics[i]['f1'] for i in rep_list}
     ndcg_d = {f'NDCG@{k}_{i}': metrics[i]['ndcg'] for i in rep_list}
     divers_d = {f'Diversity@{k}_{i}': metrics[i]['diversity'] for i in rep_list}
 
@@ -270,6 +330,8 @@ def metrics_calc(labels: str,
                                **a_rank_d, 
                                **b_rank_d,
                                **recall_d,
+                               **prec_d,
+                               **f1_d,
                                **ndcg_d,
                                **divers_d})
     #print(f'This is the df_metrics new {df_metrics}')
@@ -281,6 +343,8 @@ def metrics_calc(labels: str,
     df_metrics[f'Avg_Rank@{k}_Mean'] = df_metrics[list(a_rank_d.keys())].mean(axis=1, numeric_only=True)
     df_metrics[f'Best_Rank@{k}_Mean'] = df_metrics[list(b_rank_d.keys())].mean(axis=1, numeric_only=True)
     df_metrics[f'Top_Recall@{k}_Mean'] = df_metrics[list(recall_d.keys())].mean(axis=1, numeric_only=True)
+    df_metrics[f'Precision@{k}_Mean'] = df_metrics[list(prec_d.keys())].mean(axis=1, numeric_only=True)
+    df_metrics[f'F1@{k}_Mean'] = df_metrics[list(f1_d.keys())].mean(axis=1, numeric_only=True)
     df_metrics[f'NDCG@{k}_Mean'] = df_metrics[list(ndcg_d.keys())].mean(axis=1, numeric_only=True)
     df_metrics[f'Diversity@{k}_Mean'] = df_metrics[list(divers_d.keys())].mean(axis=1, numeric_only=True)
     df_metrics[f'EF@{k}_Std'] = df_metrics[list(ef_d.keys())].std(axis=1, numeric_only=True)
@@ -288,6 +352,8 @@ def metrics_calc(labels: str,
     df_metrics[f'Avg_Rank@{k}_Std'] = df_metrics[list(a_rank_d.keys())].std(axis=1, numeric_only=True)
     df_metrics[f'Best_Rank@{k}_Std'] = df_metrics[list(b_rank_d.keys())].std(axis=1, numeric_only=True)
     df_metrics[f'Top_Recall@{k}_Std'] = df_metrics[list(recall_d.keys())].std(axis=1, numeric_only=True)
+    df_metrics[f'Precision@{k}_Std'] = df_metrics[list(prec_d.keys())].std(axis=1, numeric_only=True)
+    df_metrics[f'F1@{k}_Std'] = df_metrics[list(f1_d.keys())].std(axis=1, numeric_only=True)
     df_metrics[f'NDCG@{k}_Std'] = df_metrics[list(ndcg_d.keys())].std(axis=1, numeric_only=True)
     df_metrics[f'Diversity@{k}_Std'] = df_metrics[list(divers_d.keys())].std(axis=1, numeric_only=True)
     #df_metrics_t = df_metrics.transpose()
