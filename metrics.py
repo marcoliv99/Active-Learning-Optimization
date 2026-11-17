@@ -1,7 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt 
-import seaborn as sns
 import re
 from evolvepro.src.utils import load_dataset
 
@@ -9,7 +7,7 @@ from evolvepro.src.utils import load_dataset
 def enrichment_factor(df: pd.DataFrame | dict,
                      k: int)-> float:
     """
-    Computes the Enrichment Factor (EF) at a given fraction of the dataset.
+    Computes the Enrichment Factor (EF) at the top k predictions of the dataset.
     Parameters
     df: DataFrame sorted by predicted score in descending order.
         Must contain a binary column 'activity_binary' (1 = active, 0 = inactive).
@@ -17,7 +15,7 @@ def enrichment_factor(df: pd.DataFrame | dict,
         Top k position at top of the prediction
     Returns
     float
-    Enrichment Fraction for the specific fraction of the dataset.
+    Enrichment Factor for the top-k predictions.
     """
     if df is None:
         raise RuntimeError('Error: Dataframe missing. Load a Dataframe first')
@@ -136,7 +134,7 @@ def f1_k(df:pd.DataFrame,
     f1=2*(precision*recall/(precision+recall))
     return f1
 
-#NDCG
+#NDCG (old version, kept for reference: new_ndcg is used instead)
 
 def ndcg(df_labels:pd.DataFrame, 
          df_round: pd.DataFrame | dict, 
@@ -207,31 +205,38 @@ def new_ndcg(df_round: pd.DataFrame | dict,
     df_ideal_sorted = df_ideal.sort_values(by='activity', ascending=False).reset_index(drop=True)
     activity = np.asarray(df_ideal_sorted['activity'])
     i_gain = np.where(activity >= threshold_hit, _minmax(activity), 0.0)
-    #print(f'This is the new i_gain: {i_gain}')
     IDCG = (i_gain[:k]/np.log2(np.arange(1,k+1)+1)).sum()
-    #print(f'This is the new IDCG: {IDCG}')
     activity_2 = np.asarray(df_round['activity'])
-    #print(activity_2)
     gain = np.where(activity_2 >= threshold_hit, _minmax(activity_2), 0.0)
     activity_2 = np.asarray(df_round['activity'])
-    #print(f'This is the new gain: {gain}')
     DCG = (gain[:k]/np.log2(np.arange(1,k+1)+1)).sum()
-    #print(f'This is the new DCG: {DCG}')
     NDCG = DCG/IDCG
-    #print(f'This is the new NDCG: {NDCG}')
     return NDCG
 
+#Metrics over one round of active learning
 
 def metrics_calc_sing(round:str , 
                       labels: str | pd.DataFrame, 
-                      results: str| pd.DataFrame | dict, 
-                      output_dir:str, 
+                      results: str | pd.DataFrame, 
                       threshold_hit:float,
-                      k:int=10) -> pd.DataFrame:
-    """This function calculates all the metrics for a single round of active learning"""
+                      k:int=10,
+                      output_path:str | None = None) -> pd.DataFrame:
+    """Calculates all the metrics for a single round of active learning.
+    The round results are merged with the labels by load_dataset, then every
+    metric is computed on the top-k predictions.
+    Args:
+    round: str, name of the round (e.g. 'Round1'), used as the column name of the output
+    labels: str or pd.DataFrame, path to the labels file (DMS data) or the DataFrame itself
+    results: str or pd.DataFrame, path to the round results file or the DataFrame itself
+    threshold_hit: float, activity value from which a variant is considered a hit
+    k: int, the number of top predictions to consider for the metric calculation (default 10)
+    output_path: str or None, if given the metrics are also saved to this CSV file
+    (default None: nothing is written to disk)
+    Returns:
+    pd.DataFrame, one row per metric (EF@k, AP@k, Avg_Rank@k, Best_Rank@k, Top_Recall@k,
+    Precision@k, F1@k, NDCG@k, Diversity@k) and a single column named after the round"""
 
     df_round = load_dataset(results, labels, threshold_hit)
-    #print(df_round)
     ef = enrichment_factor(df_round,k)
     ap = apk(df_round, k)
     a_rank = avg_rank(df_round, k)
@@ -252,27 +257,40 @@ def metrics_calc_sing(round:str ,
                 f'Diversity@{k}':div} 
     #print(metrics)
     df_metrics = pd.DataFrame(metrics.values(), columns=[round], index= metrics.keys())
-    print(f'This is the df_metrics new \n{df_metrics}')
-    df_metrics.to_csv(output_dir, index=True)
+    if output_path is not None:
+        df_metrics.to_csv(output_path, index=True)
     return df_metrics
 
 
-#Function that defines how to calculate the enrichment factor, average precision, 
-#average rank, best rank, top recall, NDCG, and diversity
+#Metrics over all rounds and replicates
+
 def metrics_calc(labels: str, 
-                 results: dict | pd.DataFrame, 
+                 results: dict, 
                  rep_list: list, 
                  threshold_hit:float, 
                  k: int) -> pd.DataFrame:
-    """ This function takes as argument the labels file and a dictionary that stores 
-    the results from the replicates of Evolvepro to calculate the Enrichment Factor, Average Precision,
-    Average Rank, Best Rank, Top Recall and NDCG  and stores the results in a new Dataframe"""
+    """Calculates all the metrics for every round and every replicate of an active
+    learning run, then the mean and the standard deviation over the replicates.
+    Args:
+    labels: str, path to the labels file (DMS data) with the columns 'variant' and 'activity'
+    results: dict, nested dictionary as built by store_results: results['{i}_rep'][round_name]
+    holds the results of replicate i at that round (a DataFrame or the path to its CSV).
+    The list of rounds is read from replicate '1_rep'
+    rep_list: list, identifiers of the replicates to analyse (e.g. [1, 2, 3]); each one must
+    have a key '{i}_rep' in results
+    threshold_hit: float, activity value from which a variant is considered a hit
+    k: int, the number of top predictions to consider for the metric calculation
+    Returns:
+    pd.DataFrame, one row per round (column 'Rounds', sorted by round number) and, for each
+    metric (EF, AP, Avg_Rank, Best_Rank, Top_Recall, Precision, F1, NDCG, Diversity),
+    one column per replicate ('{metric}@{k}_{i}') plus the mean and the standard deviation
+    over the replicates ('{metric}@{k}_Mean', '{metric}@{k}_Std')"""
+
     #Sorts the rounds's column in the dataframe with just the number of the iteration/round
     rounds = sorted(
         results['1_rep'].keys(),
         key=lambda x: int(''.join(filter(str.isdigit, x))) 
         if any(ch.isdigit() for ch in x) else x)
-    #print(rounds)
     #creates a temporary dict in which we'll store results from the metrics calculation
     metrics = {i: {'ef': [], 
                 'ap': [], 
@@ -282,11 +300,9 @@ def metrics_calc(labels: str,
                 'precision':[],
                 'f1':[], 
                 'ndcg':[],
-                'diversity':[]} for i in rep_list}   
-    #print(metrics)
+                'diversity':[]} for i in rep_list}
     #This nested loop iterates over the replicates and rounds results to calcule
     #the metrics for each round
-    df_labels = pd.read_csv(labels)
     for round_name in rounds:
         for i in rep_list:
             rep_key = f'{i}_rep'
@@ -311,8 +327,7 @@ def metrics_calc(labels: str,
             metrics[i]['f1'].append(f1)
             metrics[i]['ndcg'].append(normdcg)
             metrics[i]['diversity'].append(divers)
-    #print(df)
-    #print(metrics)
+
     #Dict for storing the metrics results for each round and each replicate
     ef_d = {f'EF@{k}_{i}': metrics[i]['ef'] for i in rep_list}
     ap_d = {f'AP@{k}_{i}': metrics[i]['ap'] for i in rep_list}
@@ -320,7 +335,7 @@ def metrics_calc(labels: str,
     b_rank_d = {f'Best_Rank@{k}_{i}': metrics[i]['best_rank'] for i in rep_list}
     recall_d = {f'Top_Recall@{k}_{i}': metrics[i]['top_recall'] for i in rep_list}
     prec_d = {f'Precision@{k}_{i}': metrics[i]['precision'] for i in rep_list}
-    f1_d = {f'F1_score@{k}_{i}': metrics[i]['f1'] for i in rep_list}
+    f1_d = {f'F1@{k}_{i}': metrics[i]['f1'] for i in rep_list}
     ndcg_d = {f'NDCG@{k}_{i}': metrics[i]['ndcg'] for i in rep_list}
     divers_d = {f'Diversity@{k}_{i}': metrics[i]['diversity'] for i in rep_list}
 
@@ -334,7 +349,6 @@ def metrics_calc(labels: str,
                                **f1_d,
                                **ndcg_d,
                                **divers_d})
-    #print(f'This is the df_metrics new {df_metrics}')
 
     
     #Calculates mean and standard deviation for each round over replicates
@@ -356,8 +370,6 @@ def metrics_calc(labels: str,
     df_metrics[f'F1@{k}_Std'] = df_metrics[list(f1_d.keys())].std(axis=1, numeric_only=True)
     df_metrics[f'NDCG@{k}_Std'] = df_metrics[list(ndcg_d.keys())].std(axis=1, numeric_only=True)
     df_metrics[f'Diversity@{k}_Std'] = df_metrics[list(divers_d.keys())].std(axis=1, numeric_only=True)
-    #df_metrics_t = df_metrics.transpose()
-    #df_metrics.to_csv(output_dir, index=False)
     return df_metrics
 
 
@@ -370,7 +382,8 @@ def random_baseline_permutation(df:pd.DataFrame,
                                 random_state = None,
                                 *args, **kwargs):
     """
-    Calculate random baseline via label permutation: shuffle activity n_permutation times,
+    Calculate random baseline via label permutation: creates new column y_pred from activity
+    and shuffles it n_permutation times.
     Parameters:
     df: DataFrame containing the data
     scoring_function: function to compute the desired metric (e.g., enrichment factor, average precision)
