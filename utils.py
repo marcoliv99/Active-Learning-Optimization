@@ -2,21 +2,31 @@ import pandas as pd
 import os
 
 
-def load_dataset(df:pd.DataFrame | dict, path_labels: str, 
-                 threshold_hit: float)-> pd.DataFrame:
-    """Loads two dataframes: one from the dms/experimental data and one from the round, 
-    merging the column activity from the first one into the second and calculating
-    a new column that contains the activity in binary form based on a threshold. 
-    Please note that the path argument can be both a str or a directed pd.DataFrame """
-    
-    if path_labels.endswith(('.xlsx', '.xls')):
-        raise RuntimeError(f'The uploaded Dataframe is an excel file, please use a csv format')
-    if isinstance(df,str):
-        df_round = pd.read_csv(df)
-        if df.endswith(('.xlsx', '.xls')):
-            raise RuntimeError(f'The uploaded Dataframe is an excel file, please use a csv format')
-    elif isinstance(df, pd.DataFrame):
+def load_dataset(df: pd.DataFrame | str | os.PathLike, path_labels: str | os.PathLike,
+                 threshold_hit: float) -> pd.DataFrame:
+    """Merge the round predictions with the experimental labels.
+    Args:
+        df: round predictions, as a DataFrame or as the path to a csv file.
+            Must contain the columns 'variant' and 'y_pred'.
+        path_labels: path to the csv file with the experimental data.
+            Must contain the columns 'variant' and 'activity'.
+        threshold_hit: activity value from which a variant counts as a hit.
+
+    Returns:
+        DataFrame sorted by y_pred (descending) with the columns of df plus
+        'activity', 'true_rank' (rank of the variant by true activity, 1 = best)
+        and 'activity_binary' (1 if activity >= threshold_hit, else 0).
+    """
+    if str(path_labels).endswith(('.xlsx', '.xls')):
+        raise RuntimeError('path_labels is an excel file, please use a csv format')
+    if isinstance(df, pd.DataFrame):
         df_round = df.copy()
+    elif isinstance(df, (str, os.PathLike)):
+        if str(df).endswith(('.xlsx', '.xls')):
+            raise RuntimeError('df is an excel file, please use a csv format')
+        df_round = pd.read_csv(df)
+    else:
+        raise TypeError(f'df must be a DataFrame or the path to a csv file, got {type(df).__name__}')
     df_labels = pd.read_csv(path_labels)
     df_labels_sorted = df_labels.sort_values(by='activity', ascending=False).reset_index(drop=True)
     df_labels_sorted["true_rank"] = df_labels_sorted.index+1
