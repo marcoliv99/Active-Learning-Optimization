@@ -1,5 +1,5 @@
 """
-Simple tests for enrichment_factor() and apk() in metrics_functions.py
+Simple tests for functions in metrics.py
 
 Each test builds a tiny DataFrame (already sorted by predicted score, which is
 what both functions assume) and compares the returned value against a number
@@ -13,7 +13,6 @@ Or plainly: python test_metrics_functions.py
 import math
 import pandas as pd
 import pytest
-
 from metrics import enrichment_factor, apk
 
 
@@ -32,7 +31,7 @@ def test_ef_perfect_ranking():
     # EF = (hits_top/n_top) / (n_active/n_total) = (10/10) / (10/100) = 10.0
     labels = [1] * 10 + [0] * 90
     df = make_df(labels)
-    assert enrichment_factor(df, fraction=0.1) == pytest.approx(10.0)
+    assert enrichment_factor(df, k=10) == pytest.approx(10.0)
 
 
 def test_ef_random_like():
@@ -41,25 +40,25 @@ def test_ef_random_like():
     labels = ([1, 1] + [0] * 8) + ([1] * 18 + [0] * 72)
     df = make_df(labels)
     assert df["activity_binary"].sum() == 20  # sanity check on the fixture
-    assert enrichment_factor(df, fraction=0.1) == pytest.approx(1.0)
+    assert enrichment_factor(df, k=10) == pytest.approx(1.0)
 
 
 def test_ef_no_hits_in_top_returns_zero():
     # No actives in the selected top fraction -> function returns 0.0
     labels = [0] * 10 + [1] * 90
     df = make_df(labels)
-    assert enrichment_factor(df, fraction=0.1) == 0.0
+    assert enrichment_factor(df, k=10) == 0.0
 
 
 def test_ef_missing_column_raises():
     df = pd.DataFrame({"something_else": [1, 0, 1]})
     with pytest.raises(RuntimeError):
-        enrichment_factor(df, fraction=0.1)
+        enrichment_factor(df, k=10)
 
 
 def test_ef_none_dataframe_raises():
     with pytest.raises(RuntimeError):
-        enrichment_factor(None, fraction=0.1)
+        enrichment_factor(None, k=10)
 
 
 # apk()  (Average Precision at k)
