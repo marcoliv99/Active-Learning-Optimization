@@ -12,8 +12,9 @@ Or plainly: python test_metrics.py
 
 import math
 import pandas as pd
+import numpy as np
 import pytest
-from metrics import enrichment_factor, apk, precision_k, f1_k, avg_rank, best_rank, top_recall, new_ndcg, diversity
+from metrics import enrichment_factor, apk, precision_k, f1_k, avg_rank, best_rank, top_recall, new_ndcg, diversity, random_baseline_permutation
 
 
 def make_df(labels):
@@ -229,6 +230,31 @@ def test_new_ndcg_reversed_ranking():
     idcg = 1 / math.log2(2) + 0.875 / math.log2(3) + 0.5 / math.log2(4)
     dcg = 0.5 / math.log2(4)
     assert new_ndcg(df, threshold_hit=0.5, k=3) == pytest.approx(dcg / idcg)
+
+
+# random_baseline_permutation()
+
+def make_labels_df(n=100):
+    """Helper: n variants with distinct activities, sorted from best to worst,
+    as random_baseline_permutation expects (true_rank = index + 1)."""
+    return pd.DataFrame({"activity": np.linspace(1.0, 0.0, n)})
+
+
+def test_baseline_avg_rank():
+    # a random ranking picks k rows at random out of n:
+    # their true ranks are uniform in 1..n -> mean (n+1)/2 = 50.5
+    scores = random_baseline_permutation(make_labels_df(), avg_rank, threshold_hit=0.8, k=10,
+                                         n_permutation=2000, random_state=0)
+    assert len(scores) == 2000
+    assert scores.mean() == pytest.approx(50.5, abs=1.0)
+
+
+def test_baseline_ef():
+    # 20 hits out of 100 (activity >= 0.8): a random top k has, on average,
+    # the same hit rate as the whole pool -> EF = 1.0
+    scores = random_baseline_permutation(make_labels_df(), enrichment_factor, threshold_hit=0.8, k=10,
+                                         n_permutation=2000, random_state=0)
+    assert scores.mean() == pytest.approx(1.0, abs=0.05)
 
 
 
