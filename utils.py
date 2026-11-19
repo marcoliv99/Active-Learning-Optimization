@@ -1,22 +1,31 @@
 import pandas as pd
 import os
+import warnings
+from typing import Literal
 
 
-def load_dataset(df: pd.DataFrame | str | os.PathLike, path_labels: str | os.PathLike,
-                 threshold_hit: float) -> pd.DataFrame:
+def load_dataset(df: pd.DataFrame | str | os.PathLike, 
+                 path_labels: str | os.PathLike,
+                 threshold_hit: float, 
+                 on_missing: Literal['raise', 'drop', 'zero'] = 'raise') -> pd.DataFrame:
     """Merge the round predictions with the experimental labels.
     Args:
         df: round predictions, as a DataFrame or as the path to a csv file.
             Must contain the columns 'variant' and 'y_pred'.
         path_labels: path to the csv file with the experimental data.
             Must contain the columns 'variant' and 'activity'.
-        threshold_hit: activity value from which a variant counts as a hit.
+        threshold_hit: activity value from which a variant counts as a hit.      
+        on_missing: what to do with variants of df that are not in the labels:
+            'raise' (default) stops with an error; 
+            'drop' discards them with a warning;
+            'zero' keeps them as inactive (activity 0, last true_rank) with a warning.
 
     Returns:
-        DataFrame sorted by y_pred (descending) with the columns of df plus
+        DataFrame sorted by y_pred (descending) with the columns of df +
         'activity', 'true_rank' (rank of the variant by true activity, 1 = best)
         and 'activity_binary' (1 if activity >= threshold_hit, else 0).
     """
+    #Managing inputs
     if str(path_labels).endswith(('.xlsx', '.xls')):
         raise RuntimeError('path_labels is an excel file, please use a csv format')
     if isinstance(df, pd.DataFrame):
@@ -27,18 +36,33 @@ def load_dataset(df: pd.DataFrame | str | os.PathLike, path_labels: str | os.Pat
         df_round = pd.read_csv(df)
     else:
         raise TypeError(f'df must be a DataFrame or the path to a csv file, got {type(df).__name__}')
+    if on_missing not in ('raise', 'drop', 'zero'):
+        raise ValueError(f"on_missing must be 'raise', 'drop' or 'zero', got {on_missing!r}")
+
     df_labels = pd.read_csv(path_labels)
     df_labels_sorted = df_labels.sort_values(by='activity', ascending=False).reset_index(drop=True)
     df_labels_sorted["true_rank"] = df_labels_sorted.index+1
-    print(df_labels_sorted.head(10))
-    labels_activity = df_labels_sorted[['variant', 'activity', 'true_rank']]
-    df_merged = pd.merge(df_round, labels_activity, on='variant', how='left')
-    df_clean = df_merged[df_merged['activity'].notna()]
-    df_ordinato = df_clean.sort_values(by='y_pred', ascending=False).reset_index(drop=True)
-    df_ordinato['activity_binary'] = (df_ordinato['activity'] >= threshold_hit).astype(int)
-    print(df_ordinato.head(10))
-    
-    return df_ordinato
+    labels_columns = df_labels_sorted[['variant', 'activity', 'true_rank']]
+    df_merged = pd.merge(df_round, labels_columns, on='variant', how='left')
+
+    #Managing NaN
+    unmatched = df_merged['activity'].isna()
+    if unmatched.any():
+        missing = df_merged.loc[unmatched, 'variant'].tolist()
+        msg = (f'{len(missing)}/{len(df_merged)} variants have no label, {missing[:10]}' 
+               f'(match rate {1 - len(missing) / len(df_merged):.1%})')
+        if on_missing == 'raise':
+            raise ValueError(msg + ". Use on_missing = 'drop' or 'zero' to keep going")
+        if on_missing == 'drop':
+            warnings.warn(msg + ': dropped')
+            df_merged = df_merged[~unmatched]
+        else:
+            warnings.warn(msg + ': treated as inactive')
+            df_merged.loc[unmatched, 'activity'] = 0
+            df_merged.loc[unmatched, 'true_rank'] = len(df_labels_sorted) + 1
+    df_sorted = df_merged.sort_values(by='y_pred', ascending=False).reset_index(drop=True)
+    df_sorted['activity_binary'] = (df_sorted['activity'] >= threshold_hit).astype(int)
+    return df_sorted
 
 #Create a dataframe in which store the results
 def store_results(path: str,  
